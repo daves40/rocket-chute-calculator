@@ -10,6 +10,14 @@ class ParachuteDescentSimulator:
         self.results = []
         self.events = {}
         self.shock_results = {}
+
+        # History data
+        self.time_history = []
+        self.altitude_history_ft = []
+        self.lateral_distance_history_ft = []
+        self.vertical_velocity_history_fps = []
+        self.horizontal_velocity_history_fps = []
+        self.total_velocity_history_fps = []
     
     def calculate_air_density(self, altitude_m):
         """Calculate air density at given altitude using standard atmosphere model"""
@@ -83,10 +91,25 @@ class ParachuteDescentSimulator:
 
 
     def simulate_descent(self):
+        self.time_history = []
+        self.altitude_history_ft = []
+        self.lateral_distance_history_ft = []
+        self.vertical_velocity_history_fps = []
+        self.horizontal_velocity_history_fps = []
+        self.total_velocity_history_fps = []
+
+        for chute in self.parachutes:
+            chute.started = False
+            chute.completed = False
+            chute.deploy_start_time = None
+            chute.force_history = []
+            chute.time_history = []
+
         altitude = self.rocket.apogee_m
         vertical_velocity = 0.1
         horizontal_velocity = self.rocket.initial_horizontal_velocity_mps
-        horizontal_position = 0.0
+        horizontal_position_m = 0.0
+
         time = 0.0
         dt = 0.01
 
@@ -195,7 +218,7 @@ class ParachuteDescentSimulator:
                 "horizontal_velocity_fps": horizontal_velocity * 3.28084,
                 "current_wind_fps": current_wind * 3.28084,
                 "total_velocity_fps": v_total * 3.28084,
-                "horizontal_position_ft": horizontal_position * 3.28084,
+                "horizontal_position_ft": horizontal_position_m * 3.28084,
                 "drag_force_N": drag_force_total,
                 "vertical_drag_force_N": vertical_drag_force,
                 "horizontal_drag_force_N": horizontal_drag_force,
@@ -216,22 +239,30 @@ class ParachuteDescentSimulator:
                     chute.force_history.append(forces[chute.name])
                     chute.time_history.append(time)
 
-            # Landing condition
-            if altitude <= 0:
-                events["landing"]["time"] = time
-                events["landing"]["velocity"] = velocity_snapshot()
-                events["landing"]["status"] = True
-                break
-
             vertical_velocity += az * dt
             horizontal_velocity += ax * dt
 
             altitude -= vertical_velocity * dt
-            horizontal_position += horizontal_velocity * dt
+            horizontal_position_m += horizontal_velocity * dt
 
             if altitude <= 0:
                 altitude = 0
 
+            self.time_history.append(time)
+            self.altitude_history_ft.append(altitude * 3.28084)
+            self.lateral_distance_history_ft.append(horizontal_position_m * 3.28084)
+            self.vertical_velocity_history_fps.append(vertical_velocity * 3.28084)
+            self.horizontal_velocity_history_fps.append(horizontal_velocity * 3.28084)
+
+            total_velocity_fps = math.sqrt(
+                (vertical_velocity * 3.28084) ** 2
+                + (horizontal_velocity * 3.28084) ** 2
+            )
+
+            self.total_velocity_history_fps.append(total_velocity_fps)
+
+            # Landing condition
+            if altitude <= 0:
                 events["landing"]["time"] = time
                 events["landing"]["velocity"] = velocity_snapshot()
                 events["landing"]["status"] = True
@@ -288,44 +319,150 @@ class ParachuteDescentSimulator:
 
         return results, events, shock_results
 
-    def print_results(self):
-        print("=== PARACHUTE DESCENT SUMMARY ===")
-        print(f"Mass: {self.rocket.total_mass_kg:.2f} kg ({self.rocket.total_mass_kg * 2.20462:.1f} lbs)")
-        print(f"Apogee: {self.rocket.apogee_ft:,.0f} ft (AGL)")
-        print()
+    def get_results_summary(self):
+        summary = {
+            "rocket": {
+                "name": self.rocket.name,
+                "mass_kg": self.rocket.total_mass_kg,
+                "mass_lbs": self.rocket.total_mass_kg * 2.20462,
+                "apogee_ft_agl": self.rocket.apogee_ft,
+            },
+            "parachutes": [],
+            "landing": None,
+        }
 
-        print("Parachutes:")
         for chute in self.parachutes:
             deploy_key = f"{chute.name}_deploy"
             full_key = f"{chute.name}_full"
 
-            deploy_event = self.events[deploy_key]
-            full_event = self.events[full_key]
+            deploy_event = self.events.get(deploy_key, {"status": False})
+            full_event = self.events.get(full_key, {"status": False})
 
             if deploy_event["status"]:
-                deploy_time = f"{deploy_event['time']:.2f} s"
-                deploy_velocity = f"{deploy_event['velocity']['total_fps']:.1f} ft/s"
+                deploy_data = {
+                    "status": True,
+                    "time_s": deploy_event["time"],
+                    "vertical_velocity_fps": deploy_event["velocity"]["vertical_fps"],
+                    "horizontal_velocity_fps": deploy_event["velocity"]["horizontal_fps"],
+                    "total_velocity_fps": deploy_event["velocity"]["total_fps"],
+                }
+            else:
+                deploy_data = {
+                    "status": False,
+                    "time_s": None,
+                    "vertical_velocity_fps": None,
+                    "horizontal_velocity_fps": None,
+                    "total_velocity_fps": None,
+                }
+
+            if full_event["status"]:
+                full_data = {
+                    "status": True,
+                    "time_s": full_event["time"],
+                    "vertical_velocity_fps": full_event["velocity"]["vertical_fps"],
+                    "horizontal_velocity_fps": full_event["velocity"]["horizontal_fps"],
+                    "total_velocity_fps": full_event["velocity"]["total_fps"],
+                }
+            else:
+                full_data = {
+                    "status": False,
+                    "time_s": None,
+                    "vertical_velocity_fps": None,
+                    "horizontal_velocity_fps": None,
+                    "total_velocity_fps": None,
+                }
+
+            if chute.name in self.shock_results:
+                shock_data = {
+                    "status": True,
+                    "max_force_N": self.shock_results[chute.name].get("max_force_N"),
+                    "max_force_lbf": self.shock_results[chute.name].get("max_force_lbf"),
+                }
+            else:
+                shock_data = {
+                    "status": False,
+                    "max_force_N": None,
+                    "max_force_lbf": None,
+                }
+
+            chute_summary = {
+                "name": chute.name,
+                "diameter_in": chute.diameter_in,
+                "cd": chute.cd,
+                "deploy_altitude_ft": chute.deploy_altitude_ft,
+                "deploy_time_s": chute.deploy_time_s,
+                "deploy_at_apogee": chute.deploy_at_apogee,
+                "reefing_factor": chute.reefing_factor,
+
+                "deployment": deploy_data,
+                "full_deployment": full_data,
+                "shock": shock_data,
+            }
+
+            summary["parachutes"].append(chute_summary)
+
+        if self.events["landing"]["status"]:
+            landing = self.events["landing"]
+            v = landing["velocity"]
+
+            summary["landing"] = {
+                "status": True,
+                "time_s": landing["time"],
+                "vertical_velocity_fps": v["vertical_fps"],
+                "horizontal_velocity_fps": v["horizontal_fps"],
+                "total_velocity_fps": v["total_fps"],
+            }
+        else:
+            summary["landing"] = {
+                "status": False,
+                "time_s": None,
+                "vertical_velocity_fps": None,
+                "horizontal_velocity_fps": None,
+                "total_velocity_fps": None,
+            }
+
+        return summary
+
+    def print_results(self):
+        summary = self.get_results_summary()
+
+        rocket = summary["rocket"]
+
+        print("=== PARACHUTE DESCENT SUMMARY ===")
+        print(f"Mass: {rocket['mass_kg']:.2f} kg ({rocket['mass_lbs']:.1f} lbs)")
+        print(f"Apogee: {rocket['apogee_ft_agl']:,.0f} ft (AGL)")
+        print()
+
+        print("Parachutes:")
+
+        for chute in summary["parachutes"]:
+            deploy = chute["deployment"]
+            full = chute["full_deployment"]
+            shock = chute["shock"]
+
+            if deploy["status"]:
+                deploy_time = f"{deploy['time_s']:.2f} s"
+                deploy_velocity = f"{deploy['total_velocity_fps']:.1f} ft/s"
             else:
                 deploy_time = "N/A"
                 deploy_velocity = "N/A"
 
-            if full_event["status"]:
-                full_time = f"{full_event['time']:.2f} s"
-                full_velocity = f"{full_event['velocity']['total_fps']:.1f} ft/s"
+            if full["status"]:
+                full_time = f"{full['time_s']:.2f} s"
+                full_velocity = f"{full['total_velocity_fps']:.1f} ft/s"
             else:
                 full_time = "N/A"
                 full_velocity = "N/A"
 
-            if chute.name in self.shock_results:
-                shock_lbf = self.shock_results[chute.name]["max_force_lbf"]
-                shock_text = f"{shock_lbf:.0f} lbf"
+            if shock["status"]:
+                shock_text = f"{shock['max_force_lbf']:.0f} lbf"
             else:
                 shock_text = "N/A"
 
             print(
-                f"{chute.name}: "
-                f"{chute.diameter_in:.0f} in, "
-                f"deploy @ {chute.deploy_altitude_ft:,.0f} ft, "
+                f"{chute['name']}: "
+                f"{chute['diameter_in']:.0f} in, "
+                f"deploy @ {chute['deploy_altitude_ft']:,.0f} ft, "
                 f"deployed t={deploy_time}, "
                 f"v={deploy_velocity}, "
                 f"full t={full_time}, "
@@ -335,12 +472,21 @@ class ParachuteDescentSimulator:
 
         print()
 
-        if self.events["landing"]["status"]:
-            landing = self.events["landing"]
-            v = landing["velocity"]
+        landing = summary["landing"]
 
+        if landing["status"]:
             print("Landing:")
-            print(f"Time: {landing['time']:.2f} s")
-            print(f"Vertical velocity: {v['vertical_fps']:.1f} ft/s")
-            print(f"Horizontal velocity: {v['horizontal_fps']:.1f} ft/s")
-            print(f"Total velocity: {v['total_fps']:.1f} ft/s")
+            print(f"Time: {landing['time_s']:.2f} s")
+            print(f"Vertical velocity: {landing['vertical_velocity_fps']:.1f} ft/s")
+            print(f"Horizontal velocity: {landing['horizontal_velocity_fps']:.1f} ft/s")
+            print(f"Total velocity: {landing['total_velocity_fps']:.1f} ft/s")
+
+    def get_plot_data(self):
+        return {
+            "time_s": self.time_history,
+            "altitude_ft": self.altitude_history_ft,
+            "lateral_distance_ft": self.lateral_distance_history_ft,
+            "vertical_velocity_fps": self.vertical_velocity_history_fps,
+            "horizontal_velocity_fps": self.horizontal_velocity_history_fps,
+            "total_velocity_fps": self.total_velocity_history_fps,
+        }

@@ -51,5 +51,8 @@ sim = ParachuteDescentSimulator(
     parachutes=parachute_config
 )
 
-results, events, shock_results = sim.simulate_descent()
+sim.simulate_descent()
+
+summary = sim.get_results_summary()
+
 sim.print_results()
